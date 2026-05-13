@@ -338,16 +338,40 @@ export default function ResultsTable({ creators, summary, jobId, platform = 'you
           Show qualified only
         </button>
 
-        <a
-          href={`/api/export/${jobId}`}
-          download
-          className="group flex items-center gap-2 px-6 py-2.5 rounded-xl border-2 border-[var(--text-primary)] bg-[var(--text-primary)] text-white font-medium text-sm hover:bg-transparent hover:text-[var(--text-primary)] transition-all"
-        >
-          <svg className="w-4 h-4 transition-transform group-hover:-translate-y-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
-          Export CSV
-        </a>
+        <div className="flex items-center gap-3">
+          {onFindMore && jobStatus === 'completed' && (
+            <button
+              onClick={onFindMore}
+              disabled={isFindingMore}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--accent)] text-white font-medium text-sm hover:bg-[var(--accent-hover)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isFindingMore ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Finding more...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Find More Creators
+                </>
+              )}
+            </button>
+          )}
+
+          <a
+            href={`/api/export/${jobId}`}
+            download
+            className="group flex items-center gap-2 px-6 py-2.5 rounded-xl border-2 border-[var(--text-primary)] bg-[var(--text-primary)] text-white font-medium text-sm hover:bg-transparent hover:text-[var(--text-primary)] transition-all"
+          >
+            <svg className="w-4 h-4 transition-transform group-hover:-translate-y-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Export CSV
+          </a>
+        </div>
       </div>
 
       {/* Results Table */}

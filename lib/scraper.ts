@@ -2,7 +2,7 @@ import { searchYouTubeChannels, scrapeChannelEmail } from './apify';
 import { getChannelDetails, getRecentVideos } from './youtube';
 import { searchInstagramByHashtags, searchInstagramProfiles, searchInstagramBySeedAccounts, searchInstagramCoaches, generateInstagramHashtags, extractEmailFromBio, getInstagramProfiles } from './instagram';
 import { qualifyCreator, qualifyInstagramCreator, qualifyXCreator } from './openai';
-import { createJob, updateJobStatus, addCreator, getJob, getExistingIdentifiers, getCreatorsByJobId, Platform } from './db';
+import { createJob, updateJobStatus, addCreator, getJob, getExistingIdentifiers, getCreatorsByJobId, linkCreatorToJob, searchCreatorsByKeyword, Platform } from './db';
 import { searchGoogleForCreators, convertSerpResultToXProfile } from './serpapi';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -489,6 +489,36 @@ function sleep(ms: number): Promise<void> {
  * Continue an existing search job - finds more creators for the same keyword
  * Skips already-processed creators and uses different query variations
  */
+/**
+ * Pull qualified creators of this niche from the global cache that aren't
+ * already attached to this job. Returns the number we managed to link in.
+ */
+async function fillFromNicheCache(
+  jobId: string,
+  platform: Platform,
+  keyword: string,
+  needed: number
+): Promise<number> {
+  if (needed <= 0) return 0;
+  const existing = await getExistingIdentifiers(jobId);
+  // Pull a wider net than `needed` since many will already be in the job
+  const cached = await searchCreatorsByKeyword(platform, keyword, Math.max(needed * 3, 50));
+  let linked = 0;
+  for (const c of cached) {
+    if (linked >= needed) break;
+    const pid = (c.platform_id || '').toLowerCase();
+    const uname = (c.username || '').toLowerCase();
+    if (pid && existing.has(pid)) continue;
+    if (uname && existing.has(uname)) continue;
+    await linkCreatorToJob(jobId, c.id);
+    if (pid) existing.add(pid);
+    if (uname) existing.add(uname);
+    linked++;
+  }
+  console.log(`[${jobId}] Cache filled ${linked}/${needed} from niche "${keyword}" on ${platform}`);
+  return linked;
+}
+
 export function continueSearchJob(
   jobId: string,
   keyword: string,
@@ -499,26 +529,39 @@ export function continueSearchJob(
 
   // Start async continuation
   (async () => {
-    // Get existing creators count to calculate query offset
+    // Step 1: cache-first — link any cached creators of this niche that aren't already in the job.
+    // This is free and instant. If it fully satisfies the request, we're done.
+    await updateJobStatus(jobId, 'processing');
+    const filledFromCache = await fillFromNicheCache(jobId, platform, keyword, maxResults);
+    const remaining = maxResults - filledFromCache;
+
+    if (remaining <= 0) {
+      console.log(`[${jobId}] Cache satisfied the request — no scrape needed`);
+      await updateJobStatus(jobId, 'completed');
+      return;
+    }
+
+    // Step 2: fall back to a fresh scrape for the remainder.
+    // Get existing creators count to calculate query offset (now includes cache hits).
     const existingCreators = await getCreatorsByJobId(jobId);
-    const queryOffset = Math.floor(existingCreators.length / 10) * 5; // Rough estimate: skip 5 queries per 10 results
+    const queryOffset = existingCreators.length * 2; // bigger jump per click than before (was /10 * 5)
 
     if (platform === 'instagram') {
       console.log(`[${jobId}] Continuing Instagram search with offset ${queryOffset}`);
-      continueInstagramJob(jobId, keyword, maxResults, queryOffset).catch(async (error) => {
+      continueInstagramJob(jobId, keyword, remaining, queryOffset).catch(async (error) => {
         console.error(`Continue Instagram Job ${jobId} failed:`, error);
         await updateJobStatus(jobId, 'failed', undefined, undefined, error.message);
       });
     } else if (platform === 'x') {
       console.log(`[${jobId}] Continuing X search with offset ${queryOffset}`);
-      continueXJob(jobId, keyword, maxResults, queryOffset).catch(async (error) => {
+      continueXJob(jobId, keyword, remaining, queryOffset).catch(async (error) => {
         console.error(`Continue X Job ${jobId} failed:`, error);
         await updateJobStatus(jobId, 'failed', undefined, undefined, error.message);
       });
     } else {
       // YouTube continuation - search with different keywords
       console.log(`[${jobId}] Continuing YouTube search`);
-      continueYouTubeJob(jobId, keyword, maxResults).catch(async (error) => {
+      continueYouTubeJob(jobId, keyword, remaining, existingCreators.length).catch(async (error) => {
         console.error(`Continue YouTube Job ${jobId} failed:`, error);
         await updateJobStatus(jobId, 'failed', undefined, undefined, error.message);
       });
@@ -743,7 +786,8 @@ async function continueXJob(
 async function continueYouTubeJob(
   jobId: string,
   keyword: string,
-  maxResults: number
+  maxResults: number,
+  existingCount: number = 0
 ): Promise<void> {
   try {
     await updateJobStatus(jobId, 'processing');
@@ -751,7 +795,8 @@ async function continueYouTubeJob(
     const existingIdentifiers = await getExistingIdentifiers(jobId);
     console.log(`[${jobId}] Excluding ${existingIdentifiers.size} existing YouTube channels`);
 
-    // Add variations to keyword to get different results
+    // Cycle through variations deterministically — each "Find More" click uses
+    // the next variation in order, so the same one isn't picked twice in a row.
     const variations = [
       `${keyword} tutorial`,
       `${keyword} tips`,
@@ -759,7 +804,8 @@ async function continueYouTubeJob(
       `${keyword} how to`,
       `${keyword} beginners`,
     ];
-    const variation = variations[Math.floor(Math.random() * variations.length)];
+    const variationIdx = Math.floor(existingCount / Math.max(maxResults, 1)) % variations.length;
+    const variation = variations[variationIdx];
 
     console.log(`[${jobId}] Searching YouTube with variation: "${variation}"`);
     const searchResults = await searchYouTubeChannels(variation, maxResults);

@@ -243,7 +243,7 @@ export async function addCreator(creator: AddCreatorInput): Promise<Creator> {
 }
 
 // Link creator to job via job_results table
-async function linkCreatorToJob(jobId: string, creatorId: number): Promise<void> {
+export async function linkCreatorToJob(jobId: string, creatorId: number): Promise<void> {
   const { error } = await supabase
     .from('job_results')
     .insert({ job_id: jobId, creator_id: creatorId });
